@@ -27,12 +27,15 @@ https://github.com/ivellioscolin/settransparency/tree/master/binary
     - Modify "Glass It" user settings.
       - "enabled": Control whether Glass It is enabled or not.
       - "alpha_percentage": The alpha percentage if "Glass It" is enabled.
+      - "alpha_percentage_min": The lowest opacity allowed, in percent (default 20, never below 5). Prevents the window from becoming invisible.
       - "application_path_alt": Location where SetTransparency.exe sits, other than ST main path.
 
 ### LINK
 https://github.com/ivellioscolin/sublime-plugin-glassit.git
 
 ### HISTORY
+- Unreleased  
+Add "alpha_percentage_min" so the window can never be made fully transparent (at 0% it became invisible and the saved 0 persisted across restarts).
 - 1.4.0  
 Add "application_path_alt" to allow "SetTransparency.exe" put in location other than ST main path.  
 Now support ST4.

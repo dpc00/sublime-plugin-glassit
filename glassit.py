@@ -56,8 +56,13 @@ def plugin_loaded():
                 config.enabled_saved = config.enabled
                 config.alpha_per_default = int(settings.get('alpha_percentage_default', 90))
                 config.alpha_per_current = int(settings.get('alpha_percentage', config.alpha_per_default))
-                config.alpha_per_current_saved = config.alpha_per_current
+                config.alpha_per_current_saved = config.alpha_per_current  # raw value on disk
                 config.alpha_step = int(settings.get('alpha_step', 5))
+                # Lowest allowed opacity (percent). Never 0: an invisible window is unusable.
+                config.alpha_per_min = max(5, min(100, int(settings.get('alpha_percentage_min', 20))))
+                # A saved 0 (or hand-edited value) must not hide the window on startup.
+                config.alpha_per_current = max(config.alpha_per_min, min(100, config.alpha_per_current))
+                config.alpha_per_default = max(config.alpha_per_min, min(100, config.alpha_per_default))
                 config.alpha_max = 255
                 config.app_name = settings.get('application', "SetTransparency.exe")
                 config.app_path_alt  = settings.get('application_path_alt', "")
@@ -113,8 +118,8 @@ class IncreaseTransparencyCommand(sublime_plugin.TextCommand):
     def run(self, edit):
         if(config.enabled == True):
             config.alpha_per_current = config.alpha_per_current - config.alpha_step
-            if(config.alpha_per_current < 0):
-                config.alpha_per_current = 0
+            if(config.alpha_per_current < config.alpha_per_min):
+                config.alpha_per_current = config.alpha_per_min
             config.alpha_current = config.alpha_max * config.alpha_per_current / 100
             update_window_transparency_nt()
 
