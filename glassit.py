@@ -1,50 +1,86 @@
-import sublime, sublime_plugin, os, sys, re, subprocess
+import sublime, sublime_plugin, os, sys, ctypes
+from ctypes import wintypes
 
-def findApp(app_name):
-    # ST2: main program path isn't included in sys.path, but sys.executable points to the main program.
-    if sys.version_info[0] == 2:
-        st_path = os.path.dirname(sys.executable)
-    else:
-        # ST3 & ST4: main program path from sublime.executable_path()
-        st_path = os.path.dirname(sublime.executable_path())
+# --- Windows API access (ctypes) -------------------------------------------
+# Every name below is a Windows constant or function. Each line says what it is.
+GWL_EXSTYLE = -20            # index for "extended window style" in Get/SetWindowLong
+WS_EX_LAYERED = 0x00080000   # style bit that lets a window have an opacity value
+LWA_ALPHA = 0x00000002       # tells SetLayeredWindowAttributes to use the alpha number
 
-    absPath = st_path + "\\" + app_name
-    if(os.path.isfile(absPath)):
-        return True, absPath
-    return False, ""
+# Type of the callback that EnumWindows calls once for every top-level window.
+ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
-def findAppAlt(app_name):
-    absPathAlt = os.path.join(config.app_path_alt, app_name)
-    if (os.path.isfile(absPathAlt)):
-        return True, absPathAlt
-    return False, ""
+def _load_user32():
+    # Load user32.dll and declare argument/return types so 64-bit handles are not truncated.
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    user32.EnumWindows.argtypes = [ENUM_WINDOWS_PROC, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowLongW.restype = ctypes.c_long
+    user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+    user32.SetWindowLongW.restype = ctypes.c_long
+    user32.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_ubyte, wintypes.DWORD]
+    user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
+    return user32
 
-def set_window_transparency_nt(pid, alpha, app_title, app_name):
-    found, app_path = findApp(app_name)
-    if (not found):
-        found, app_path = findAppAlt(app_name)
-    if(found):
-        command = "\"" + app_path + "\"" + " " + str(pid) + " " + str(alpha) + " " + app_title
-        subprocess.Popen(command, shell=True)
-        print('Using transparency utility from "%s"' %(app_path))
-        print("Sublime window transparency is set to %d" %(alpha))
-    else:
-        print("Cannot find %s! Please download and put into sublime path or application_path_alt." %(app_name))
-    return found
+def set_window_transparency_nt(pid, alpha, app_title):
+    """Set opacity (0-255) on every visible Sublime window, directly and immediately.
+
+    Replaces the old external SetTransparency.exe: no process is started per change,
+    so changes can never finish out of order or pile up.
+    """
+    user32 = _load_user32()
+    alpha = max(1, min(255, int(round(alpha))))  # never 0: an invisible window is unusable
+    changed = []
+
+    def visit(hwnd, _lparam):
+        owner_pid = wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner_pid))  # which process owns it
+        if owner_pid.value != pid or not user32.IsWindowVisible(hwnd):
+            return True  # not ours, or hidden: keep enumerating
+        title = ctypes.create_unicode_buffer(512)
+        user32.GetWindowTextW(hwnd, title, 512)  # read the window title
+        if app_title not in title.value:
+            return True  # e.g. a popup without our title: leave alone
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        if not style & WS_EX_LAYERED:
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)  # allow opacity
+        user32.SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA)  # apply the opacity
+        changed.append(hwnd)
+        return True
+
+    user32.EnumWindows(ENUM_WINDOWS_PROC(visit), 0)
+    print("Sublime window transparency is set to %d (%d window(s))" % (alpha, len(changed)))
+    return bool(changed)
+
+# --- Saving the setting -----------------------------------------------------
+def save_soon():
+    """Save the opacity once, 800 ms after the last change (not on every scroll tick)."""
+    config.save_ticket += 1
+    ticket = config.save_ticket
+    def save_if_latest():
+        if ticket != config.save_ticket:
+            return  # a newer change arrived; that one will save
+        config.settings.set('enabled', config.enabled)
+        config.settings.set('alpha_percentage', config.alpha_per_current)
+        sublime.save_settings('glassit.sublime-settings')
+    sublime.set_timeout(save_if_latest, 800)
 
 def update_window_transparency_nt():
-    if (set_window_transparency_nt(config.st_pid, config.alpha_current if config.enabled else config.alpha_max, config.st_title, config.app_name)):
-        if (config.enabled_saved != config.enabled or config.alpha_per_current_saved != config.alpha_per_current):
-            if (config.enabled_saved != config.enabled):
-                config.settings.set('enabled', config.enabled)
-                config.enabled_saved = config.enabled
-            if (config.alpha_per_current_saved != config.alpha_per_current):
-                config.settings.set('alpha_percentage', config.alpha_per_current)
-                config.alpha_per_current_saved = config.alpha_per_current
-            sublime.save_settings('glassit.sublime-settings')
+    alpha = config.alpha_current if config.enabled else config.alpha_max
+    if set_window_transparency_nt(config.st_pid, alpha, config.st_title):
+        save_soon()
 
 def plugin_loaded():
     settings = sublime.load_settings('glassit.sublime-settings')
+    # Remove 'reload' hooks left by older versions of this file (hot-reload keeps them).
+    settings.clear_on_change('reload')
 
     global config
 
@@ -52,20 +88,16 @@ def plugin_loaded():
         def load(self):
             if (sublime.platform() == "windows"):
                 config.settings = settings
+                config.save_ticket = 0
                 config.enabled = bool(settings.get('enabled', True))
-                config.enabled_saved = config.enabled
                 config.alpha_per_default = int(settings.get('alpha_percentage_default', 90))
                 config.alpha_per_current = int(settings.get('alpha_percentage', config.alpha_per_default))
-                config.alpha_per_current_saved = config.alpha_per_current  # raw value on disk
                 config.alpha_step = int(settings.get('alpha_step', 5))
-                # Lowest allowed opacity (percent). Never 0: an invisible window is unusable.
+                # Lowest allowed opacity (percent). Hard minimum 5, never 0.
                 config.alpha_per_min = max(5, min(100, int(settings.get('alpha_percentage_min', 20))))
-                # A saved 0 (or hand-edited value) must not hide the window on startup.
                 config.alpha_per_current = max(config.alpha_per_min, min(100, config.alpha_per_current))
                 config.alpha_per_default = max(config.alpha_per_min, min(100, config.alpha_per_default))
                 config.alpha_max = 255
-                config.app_name = settings.get('application', "SetTransparency.exe")
-                config.app_path_alt  = settings.get('application_path_alt', "")
                 config.st_title = settings.get('st_title', "Sublime Text")
                 config.delay = 5000
 
@@ -75,15 +107,10 @@ def plugin_loaded():
                     # ST2 load plugin within main process
                     config.st_pid = os.getpid()
                 else:
-                    # ST3 load plugin in the child process "plugin_host.exe"
+                    # ST3 & ST4 load plugin in the child process "plugin_host.exe"
                     config.st_pid = os.getppid()
             else:
                 print("Set transparency doesn't support this platform yet!")
-
-        def reload(self):
-            self.load()
-            if (sublime.platform() == "windows"):
-                update_window_transparency_nt()
 
     config = config()
     config.load()
@@ -93,8 +120,8 @@ def plugin_loaded():
         sublime.set_timeout(update_window_transparency_nt, config.delay)
     else:
         print("Set transparency doesn't support this platform yet!")
-
-    settings.add_on_change('reload', lambda:config.reload())
+    # No add_on_change('reload') hook on purpose: our own saves used to trigger a
+    # re-read that could load an older value and make the opacity jump around.
 
 if sys.version_info[0] == 2:
     plugin_loaded()

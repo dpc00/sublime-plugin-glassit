@@ -6,10 +6,8 @@
 - Only works on Windows later than Windows XP.
 
 ### INSTALLATION
-1. Get "SetTransparency.exe" from below link or compile by yourself.
-https://github.com/ivellioscolin/settransparency/tree/master/binary
-2. Put "SetTransparency.exe" into ST main path, or the location specified in settings "application_path_alt".
-3. Search and install "GlassIt" via "Package Control". You may also download the archive and extract to "{sublime}\Data\Packages\GlassIt".
+Search and install "GlassIt" via "Package Control". You may also download the archive and extract to "{sublime}\Data\Packages\GlassIt".
+No external program is needed: the window opacity is set directly through the Windows API.
 
 ### USAGE
 1. ST main window will be set as transparent after the plugin loaded.
@@ -28,12 +26,13 @@ https://github.com/ivellioscolin/settransparency/tree/master/binary
       - "enabled": Control whether Glass It is enabled or not.
       - "alpha_percentage": The alpha percentage if "Glass It" is enabled.
       - "alpha_percentage_min": The lowest opacity allowed, in percent (default 20, never below 5). Prevents the window from becoming invisible.
-      - "application_path_alt": Location where SetTransparency.exe sits, other than ST main path.
 
 ### LINK
 https://github.com/ivellioscolin/sublime-plugin-glassit.git
 
 ### HISTORY
+- Unreleased  
+Set the opacity directly through the Windows API instead of starting SetTransparency.exe for every change (no external program, no processes finishing out of order). Remove the settings-reload hook and save the setting once after changes stop, so quick scrolling can no longer jump to stale values.
 - Unreleased  
 Add "alpha_percentage_min" so the window can never be made fully transparent (at 0% it became invisible and the saved 0 persisted across restarts).
 - 1.4.0  
